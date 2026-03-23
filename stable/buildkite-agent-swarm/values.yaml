@@ -161,7 +161,7 @@ podContainers: {}
 # Preconfigured Docker-in-Docker (DinD) container specification
 dind:
   enabled: false
-  image: docker:24.0-dind
+  image: docker:28.0.1-dind
   port: 2375
   resources: {}
   mtu: 1500
@@ -179,7 +179,7 @@ dind:
 
 dindDaemonSet:
   enabled: true
-  image: docker:24.0-dind
+  image: docker:28.0.1-dind
   storage:
     tmpfs: false # use tmpfs / emptyDir, medium=Memory
     sizeLimit: 16Gi
@@ -218,7 +218,7 @@ dindDaemonSet:
 cleanup:
   enabled: false
   dryRun: true              # log what would be deleted without actually deleting
-  image: docker:24.0-cli
+  image: docker:28.0-cli
   intervalSeconds: 86400    # once per day
   resources: {}
 
