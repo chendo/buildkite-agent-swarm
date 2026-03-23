@@ -90,21 +90,21 @@ spec:
           - name: QUEUE_NAME
             value: "{{ $queue }}"
           volumeMounts:
-            - name: shared-volume
-              mountPath: "/var/buildkite"
+            - name: pod-volume
+              mountPath: "/var/buildkite-local"
           command:
             - /bin/sh
             - -ex
             - -c
             - |
               kubectl get pods -l app={{ $deploymentName }},pod-template-hash=$POD_TEMPLATE_HASH --field-selector spec.nodeName=$NODE_NAME --sort-by=.metadata.creationTimestamp --no-headers=true -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp > /var/buildkite/pods.log
-              pod_index=$(cat /var/buildkite/pods.log | awk "/$POD_NAME/{print NR; exit}")
+              pod_index=$(cat /var/buildkite-local/pods.log | awk "/$POD_NAME/{print NR; exit}")
               priority=$(({{ $basePriority | default "100"}} - pod_index))
               pod_suffix=${POD_NAME: -5}
               node=$(echo $NODE_NAME | sed 's/^{{ $removeNodePrefix }}//')
-              echo "name={{ $root.Values.agent.namePrefix }}$node-$QUEUE_NAME-$pod_suffix" > /var/buildkite/agent.cfg
-              echo "priority=$priority" >> /var/buildkite/agent.cfg
-              echo "tags=$BUILDKITE_AGENT_TAGS,node=$NODE_NAME,priority=$priority" >> /var/buildkite/agent.cfg
+              echo "name={{ $root.Values.agent.namePrefix }}$node-$QUEUE_NAME-$pod_suffix" > /var/buildkite-local/agent.cfg
+              echo "priority=$priority" >> /var/buildkite-local/agent.cfg
+              echo "tags=$BUILDKITE_AGENT_TAGS,node=$NODE_NAME,priority=$priority" >> /var/buildkite-local/agent.cfg
 {{- if $root.Values.podInitContainers }}
 {{ toYaml $root.Values.podInitContainers | nindent 8 }}
 {{- end }}
@@ -171,7 +171,7 @@ spec:
             {{- end }}
             {{- end }}
             - name: BUILDKITE_AGENT_CONFIG
-              value: "/var/buildkite/agent.cfg"
+              value: "/var/buildkite-local/agent.cfg"
             - name: BUILDKITE_BUILD_PATH
               value: "/var/buildkite/builds"
             - name: BUILDKITE_PLUGINS_PATH
@@ -222,8 +222,8 @@ spec:
           resources:
 {{ toYaml (default dict $settings.resources) | indent 12 }}
           volumeMounts:
-            - name: shared-volume
-              mountPath: "/var/buildkite"
+            - name: pod-volume
+              mountPath: "/var/buildkite-local"
 {{- if $root.Values.dindDaemonSet.enabled }}
             - name: docker-socket
               mountPath: /var/run/docker
@@ -260,8 +260,8 @@ spec:
             {{- if $root.Values.dind.volumeMounts }}{{ toYaml $root.Values.dind.volumeMounts | nindent 12 }}{{- end }}
             - name: "docker-graph-storage"
               mountPath: "/var/lib/docker"
-            - name: shared-volume
-              mountPath: "/var/buildkite"
+            - name: pod-volume
+              mountPath: "/var/buildkite-local"
             {{- if $attachRegistryCreds.gcr }}
             - name: service-key
               mountPath: /etc/service_key
@@ -276,7 +276,7 @@ spec:
 {{- end }}
       terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
       volumes:
-        - name: shared-volume
+        - name: pod-volume
           emptyDir: {}
 {{- if $root.Values.dindDaemonSet.enabled }}
         - name: docker-socket
