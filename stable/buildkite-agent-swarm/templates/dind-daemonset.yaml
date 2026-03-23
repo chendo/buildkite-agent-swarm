@@ -57,6 +57,8 @@ spec:
           mountPath: /var/buildkite/docker
         - name: docker-run
           mountPath: /var/run/docker
+        - name: buildkite-builds
+          mountPath: /var/buildkite/builds
         livenessProbe:
           exec:
             command:
@@ -91,6 +93,10 @@ spec:
       - name: docker-run
         hostPath:
           path: /var/buildkite/docker/run
+          type: DirectoryOrCreate
+      - name: buildkite-builds
+        hostPath:
+          path: /var/buildkite/builds
           type: DirectoryOrCreate
 
 {{- end }}

@@ -227,6 +227,8 @@ spec:
 {{- if $root.Values.dindDaemonSet.enabled }}
             - name: docker-socket
               mountPath: /var/run/docker
+            - name: buildkite-builds
+              mountPath: /var/buildkite/builds
 {{- end }}
 {{- if $settings.volumeMounts }}{{ toYaml $settings.volumeMounts | nindent 12 }}{{- end }}
 {{- if $root.Values.enableHostDocker }}
@@ -282,6 +284,9 @@ spec:
         - name: docker-socket
           hostPath:
             path: /var/buildkite/docker/run
+        - name: buildkite-builds
+          hostPath:
+            path: /var/buildkite/builds
 {{- end}}
 {{- if $settings.volumes }}{{ toYaml $settings.volumes | nindent 8 }}{{- end }}
 {{- if $root.Values.enableHostDocker }}
