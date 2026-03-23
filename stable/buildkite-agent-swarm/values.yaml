@@ -30,6 +30,10 @@ agent:
         # requests:
         #   cpu: 100m
         #   memory: 128Mi
+      # Kubernetes scheduling priority (requires priorities.enabled: true)
+      # Higher values are scheduled first during resource contention.
+      # Defaults to priorities.defaultAgent
+      # priority: 200 
       nodeSelector: {}
 
   tags:
@@ -252,10 +256,14 @@ cleanup:
 # May be increased to allow pipelines to complete successfully before the pod is terminated.
 terminationGracePeriodSeconds: 30
 
+# Kubernetes PriorityClasses for pod scheduling.
+# When enabled, creates a PriorityClass per queue so that critical queues
+# (e.g. build, deploy) are scheduled before lower-priority ones (e.g. test).
+# Set per-queue priority via agent.queues.<name>.priority (see above).
 priorities:
-  enabled: false
-  dind: 1000
-  defaultAgent: 100
+  enabled: true
+  dind: 1000            # DIND DaemonSet priority (should be highest)
+  defaultAgent: 100     # fallback for queues without explicit priority
 
 # Control the lifecycle management for the deployment
 lifecycle:
