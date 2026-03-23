@@ -109,7 +109,7 @@ Parameter | Description | Default
 `terminationGracePeriodSeconds` | Duration in seconds the pod needs to terminate gracefully | `30`
 `nameOverride` | Provide a name to override the default `$name` template variable | `nil`
 `fullnameOverride` | Provide a name to substitute for the full names of resources | `nil`
-`cleanup.enabled` | Enable the node-level cleanup DaemonSet | `true`
+`cleanup.enabled` | Enable the node-level cleanup DaemonSet | `false`
 `cleanup.dryRun` | Log what would be deleted without actually deleting | `true`
 `cleanup.image` | Image for the cleanup container | `docker:24.0-cli`
 `cleanup.intervalSeconds` | Seconds between cleanup runs | `86400`

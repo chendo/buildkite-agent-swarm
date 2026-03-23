@@ -216,7 +216,7 @@ dindDaemonSet:
 
 # Node-level periodic cleanup DaemonSet
 cleanup:
-  enabled: true
+  enabled: false
   dryRun: true              # log what would be deleted without actually deleting
   image: docker:24.0-cli
   intervalSeconds: 86400    # once per day
