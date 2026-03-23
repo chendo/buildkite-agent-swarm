@@ -97,7 +97,7 @@ spec:
             - -ex
             - -c
             - |
-              kubectl get pods -l app={{ $deploymentName }},pod-template-hash=$POD_TEMPLATE_HASH --field-selector spec.nodeName=$NODE_NAME --sort-by=.metadata.creationTimestamp --no-headers=true -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp > /var/buildkite/pods.log
+              kubectl get pods -l app={{ $deploymentName }},pod-template-hash=$POD_TEMPLATE_HASH --field-selector spec.nodeName=$NODE_NAME --sort-by=.metadata.creationTimestamp --no-headers=true -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp > /var/buildkite-local/pods.log
               pod_index=$(cat /var/buildkite-local/pods.log | awk "/$POD_NAME/{print NR; exit}")
               priority=$(({{ $basePriority | default "100"}} - pod_index))
               pod_suffix=${POD_NAME: -5}
