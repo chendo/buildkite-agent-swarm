@@ -109,6 +109,30 @@ Parameter | Description | Default
 `terminationGracePeriodSeconds` | Duration in seconds the pod needs to terminate gracefully | `30`
 `nameOverride` | Provide a name to override the default `$name` template variable | `nil`
 `fullnameOverride` | Provide a name to substitute for the full names of resources | `nil`
+`cleanup.enabled` | Enable the node-level cleanup DaemonSet | `true`
+`cleanup.dryRun` | Log what would be deleted without actually deleting | `true`
+`cleanup.image` | Image for the cleanup container | `docker:24.0-cli`
+`cleanup.intervalSeconds` | Seconds between cleanup runs | `86400`
+`cleanup.resources` | Resource requests/limits for the cleanup container | `{}`
+`cleanup.builds.enabled` | Enable build directory cleanup | `true`
+`cleanup.builds.path` | Path to the build directory | `/var/buildkite/builds`
+`cleanup.builds.maxAgeDays` | Delete build dirs older than this many days | `14`
+`cleanup.docker.enabled` | Enable Docker resource cleanup via DIND socket | `true`
+`cleanup.docker.containers.enabled` | Prune stopped containers | `true`
+`cleanup.docker.containers.filter` | Filter for container prune | `until=48h`
+`cleanup.docker.danglingImages.enabled` | Prune dangling images | `true`
+`cleanup.docker.danglingImages.filter` | Filter for dangling image prune | `until=48h`
+`cleanup.docker.unusedImages.enabled` | Prune all unused images (aggressive) | `false`
+`cleanup.docker.unusedImages.filter` | Filter for unused image prune | `until=168h`
+`cleanup.docker.buildCache.enabled` | Prune Docker build cache | `true`
+`cleanup.docker.buildCache.filter` | Filter for build cache prune | `until=168h`
+`cleanup.docker.buildCache.keepStorage` | Keep storage amount for build cache prune | `""`
+`cleanup.docker.volumes.enabled` | Prune unused Docker volumes (destructive) | `false`
+`cleanup.docker.volumes.filter` | Filter for volume prune | `""`
+`priorities.enabled` | Enable Kubernetes PriorityClasses for pod scheduling | `false`
+`priorities.dind` | Priority value for the DIND DaemonSet | `1000`
+`priorities.defaultAgent` | Default priority for agent queues without explicit priority | `100`
+`agent.queues.<name>.priority` | Kubernetes scheduling priority for a specific queue | `100`
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`.
 

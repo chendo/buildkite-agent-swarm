@@ -214,12 +214,48 @@ dindDaemonSet:
   #  cpu: 100m
   #  memory: 128Mi
 
+# Node-level periodic cleanup DaemonSet
+cleanup:
+  enabled: true
+  dryRun: true              # log what would be deleted without actually deleting
+  image: docker:24.0-cli
+  intervalSeconds: 86400    # once per day
+  resources: {}
+
+  # Build directory cleanup
+  builds:
+    enabled: true
+    path: /var/buildkite/builds
+    maxAgeDays: 14
+
+  # Docker cleanup (requires DIND socket)
+  docker:
+    enabled: true
+    containers:
+      enabled: true
+      filter: "until=48h"
+    danglingImages:
+      enabled: true
+      filter: "until=48h"
+    unusedImages:
+      enabled: false        # aggressive — off by default
+      filter: "until=168h"
+    buildCache:
+      enabled: true
+      filter: "until=168h"
+      keepStorage: ""
+    volumes:
+      enabled: false         # destructive — off by default
+      filter: ""
+
 # Duration in seconds the pod needs to terminate gracefully.
 # May be increased to allow pipelines to complete successfully before the pod is terminated.
 terminationGracePeriodSeconds: 30
 
 priorities:
   enabled: false
+  dind: 1000
+  defaultAgent: 100
 
 # Control the lifecycle management for the deployment
 lifecycle:

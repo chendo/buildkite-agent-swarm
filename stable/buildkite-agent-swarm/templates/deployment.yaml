@@ -49,7 +49,7 @@ spec:
 {{- end }}
     spec:
       {{- if $root.Values.priorities.enabled }}
-      priorityClassName: {{ $name }}-agent-default
+      priorityClassName: {{ $name }}-agent-{{ $queue }}
       {{- end }}
       affinity:
         podAntiAffinity:

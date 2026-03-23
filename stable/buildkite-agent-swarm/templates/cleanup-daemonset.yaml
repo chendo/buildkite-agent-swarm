@@ -1,0 +1,188 @@
+{{- if .Values.cleanup.enabled }}
+{{- $name := include "fullname" . }}
+{{- $buildsPath := .Values.cleanup.builds.path | default "/var/buildkite/builds" }}
+{{- $maxAgeDays := int (.Values.cleanup.builds.maxAgeDays | default 14) }}
+{{- $intervalSeconds := int (.Values.cleanup.intervalSeconds | default 86400) }}
+apiVersion: {{ template "daemonset.apiVersion" . }}
+kind: DaemonSet
+metadata:
+  name: {{ $name }}-cleanup
+  labels:
+    app: {{ $name }}-cleanup
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $name }}-cleanup
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}-cleanup
+    spec:
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      {{- end }}
+      serviceAccount: {{ template "fullname" . }}
+      containers:
+      - name: cleanup
+        image: {{ .Values.cleanup.image | default "docker:24.0-cli" }}
+        securityContext:
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+        env:
+          - name: DRY_RUN
+            value: {{ .Values.cleanup.dryRun | default false | quote }}
+          - name: CLEANUP_INTERVAL
+            value: {{ $intervalSeconds | quote }}
+          - name: BUILDS_MAX_AGE_DAYS
+            value: {{ $maxAgeDays | quote }}
+          - name: BUILDS_PATH
+            value: {{ $buildsPath | quote }}
+          {{- if .Values.cleanup.docker.enabled }}
+          - name: DOCKER_HOST
+            value: unix:///var/buildkite/docker/run/docker.sock
+          - name: CONTAINER_FILTER
+            value: {{ .Values.cleanup.docker.containers.filter | default "" | quote }}
+          - name: DANGLING_IMAGE_FILTER
+            value: {{ .Values.cleanup.docker.danglingImages.filter | default "" | quote }}
+          - name: UNUSED_IMAGE_FILTER
+            value: {{ .Values.cleanup.docker.unusedImages.filter | default "" | quote }}
+          - name: BUILD_CACHE_FILTER
+            value: {{ .Values.cleanup.docker.buildCache.filter | default "" | quote }}
+          - name: BUILD_CACHE_KEEP_STORAGE
+            value: {{ .Values.cleanup.docker.buildCache.keepStorage | default "" | quote }}
+          - name: VOLUME_FILTER
+            value: {{ .Values.cleanup.docker.volumes.filter | default "" | quote }}
+          {{- end }}
+        resources:
+{{ toYaml .Values.cleanup.resources | indent 10 }}
+        command:
+          - /bin/sh
+          - -c
+          - |
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "*** DRY RUN MODE — no deletions will be performed ***"
+            fi
+            echo "Cleanup loop starting, interval=${CLEANUP_INTERVAL}s"
+            while true; do
+              echo "--- Cleanup run at $(date -Iseconds) ---"
+
+              # Disk usage summary
+              echo "Disk usage:"
+              df -h "$BUILDS_PATH" 2>/dev/null || true
+              {{- if .Values.cleanup.docker.enabled }}
+              if [ -S "/var/buildkite/docker/run/docker.sock" ]; then
+                echo "Docker disk usage:"
+                docker system df 2>/dev/null || true
+              fi
+              {{- end }}
+
+              {{- if .Values.cleanup.builds.enabled }}
+              # Build directory cleanup
+              echo "Pruning build dirs older than ${BUILDS_MAX_AGE_DAYS} days..."
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "[dry-run] Would delete:"
+                find "$BUILDS_PATH" -mindepth 1 -maxdepth 1 -type d -mtime +"$BUILDS_MAX_AGE_DAYS" -exec echo "  {}" \; 2>&1 || true
+              else
+                find "$BUILDS_PATH" -mindepth 1 -maxdepth 1 -type d -mtime +"$BUILDS_MAX_AGE_DAYS" -exec rm -rf {} + 2>&1 || true
+              fi
+              {{- end }}
+
+              {{- if .Values.cleanup.docker.enabled }}
+              # Docker cleanup
+              if [ -S "/var/buildkite/docker/run/docker.sock" ]; then
+
+                {{- if .Values.cleanup.docker.containers.enabled }}
+                echo "Pruning stopped containers..."
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[dry-run] Containers that would be pruned:"
+                  docker container ls -a --filter status=exited ${CONTAINER_FILTER:+--filter "$CONTAINER_FILTER"} 2>&1 || true
+                else
+                  docker container prune -f ${CONTAINER_FILTER:+--filter "$CONTAINER_FILTER"} 2>&1 || true
+                fi
+                {{- end }}
+
+                {{- if .Values.cleanup.docker.danglingImages.enabled }}
+                echo "Pruning dangling images..."
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[dry-run] Dangling images that would be pruned:"
+                  docker image ls --filter dangling=true ${DANGLING_IMAGE_FILTER:+--filter "$DANGLING_IMAGE_FILTER"} 2>&1 || true
+                else
+                  docker image prune -f ${DANGLING_IMAGE_FILTER:+--filter "$DANGLING_IMAGE_FILTER"} 2>&1 || true
+                fi
+                {{- end }}
+
+                {{- if .Values.cleanup.docker.unusedImages.enabled }}
+                echo "Pruning ALL unused images..."
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[dry-run] Unused images that would be pruned:"
+                  docker image ls ${UNUSED_IMAGE_FILTER:+--filter "$UNUSED_IMAGE_FILTER"} 2>&1 || true
+                else
+                  docker image prune -af ${UNUSED_IMAGE_FILTER:+--filter "$UNUSED_IMAGE_FILTER"} 2>&1 || true
+                fi
+                {{- end }}
+
+                {{- if .Values.cleanup.docker.buildCache.enabled }}
+                echo "Pruning build cache..."
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[dry-run] Build cache usage:"
+                  docker builder du 2>&1 || true
+                else
+                  docker builder prune -f ${BUILD_CACHE_FILTER:+--filter "$BUILD_CACHE_FILTER"} ${BUILD_CACHE_KEEP_STORAGE:+--keep-storage "$BUILD_CACHE_KEEP_STORAGE"} 2>&1 || true
+                fi
+                {{- end }}
+
+                {{- if .Values.cleanup.docker.volumes.enabled }}
+                echo "Pruning unused volumes..."
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[dry-run] Volumes that would be pruned:"
+                  docker volume ls -f dangling=true ${VOLUME_FILTER:+--filter "$VOLUME_FILTER"} 2>&1 || true
+                else
+                  docker volume prune -f ${VOLUME_FILTER:+--filter "$VOLUME_FILTER"} 2>&1 || true
+                fi
+                {{- end }}
+
+              else
+                echo "Docker socket not found, skipping docker cleanup"
+              fi
+              {{- end }}
+
+              echo "--- Cleanup complete, sleeping ${CLEANUP_INTERVAL}s ---"
+              sleep "$CLEANUP_INTERVAL"
+            done
+        volumeMounts:
+        {{- if .Values.cleanup.builds.enabled }}
+        - name: buildkite-builds
+          mountPath: {{ $buildsPath | quote }}
+        {{- end }}
+        {{- if .Values.cleanup.docker.enabled }}
+        - name: docker-socket
+          mountPath: /var/buildkite/docker/run
+          readOnly: true
+        {{- end }}
+      volumes:
+      {{- if .Values.cleanup.builds.enabled }}
+      - name: buildkite-builds
+        hostPath:
+          path: {{ $buildsPath | quote }}
+          type: DirectoryOrCreate
+      {{- end }}
+      {{- if .Values.cleanup.docker.enabled }}
+      - name: docker-socket
+        hostPath:
+          path: /var/buildkite/docker/run
+          type: DirectoryOrCreate
+      {{- end }}
+{{- end }}

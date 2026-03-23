@@ -5,10 +5,12 @@ kind: PriorityClass
 metadata:
   name: {{ template "fullname" . }}-dind
 value: {{ .Values.priorities.dind | default 1000 }}
+{{- range $queueName, $settings := .Values.agent.queues }}
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
-  name: {{ template "fullname" . }}-agent-default
-value: {{ .Values.priorities.dind | default 100 }}
+  name: {{ template "fullname" $ }}-agent-{{ $queueName }}
+value: {{ $settings.priority | default ($.Values.priorities.defaultAgent | default 100) }}
+{{- end }}
 {{- end }}
