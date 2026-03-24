@@ -50,6 +50,10 @@ spec:
             value: {{ $maxAgeDays | quote }}
           - name: BUILDS_PATH
             value: {{ $buildsPath | quote }}
+          - name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
           {{- if .Values.cleanup.docker.enabled }}
           - name: DOCKER_HOST
             value: unix:///var/buildkite/docker/run/docker.sock
@@ -90,13 +94,38 @@ spec:
               {{- end }}
 
               {{- if .Values.cleanup.builds.enabled }}
-              # Build directory cleanup
-              echo "Pruning build dirs older than ${BUILDS_MAX_AGE_DAYS} days..."
-              if [ "$DRY_RUN" = "true" ]; then
-                echo "[dry-run] Would delete:"
-                find "$BUILDS_PATH" -mindepth 1 -maxdepth 1 -type d -mtime +"$BUILDS_MAX_AGE_DAYS" -exec echo "  {}" \; 2>&1 || true
+              # Build directory cleanup — remove dirs for pods that no longer exist
+              echo "Checking for orphaned build dirs (older than ${BUILDS_MAX_AGE_DAYS} days, pod no longer active)..."
+              APISERVER="https://kubernetes.default.svc"
+              CACERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+              SA_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || true)"
+              if [ -n "$SA_TOKEN" ]; then
+                NAMESPACE="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
+                active_pods="$(wget -qO- --header="Authorization: Bearer $SA_TOKEN" \
+                  --ca-certificate="$CACERT" \
+                  "${APISERVER}/api/v1/namespaces/${NAMESPACE}/pods?fieldSelector=spec.nodeName=${NODE_NAME}" 2>/dev/null \
+                  | sed -n 's/.*"name":"\([^"]*\)".*/\1/p' | sort -u)"
+                for dir in "$BUILDS_PATH"/*/; do
+                  [ -d "$dir" ] || continue
+                  dir_name="$(basename "$dir")"
+                  # Extract pod suffix (last 5 chars) from agent name <node>-<queue>-<suffix>
+                  pod_suffix="$(echo "$dir_name" | sed 's/.*-\(.....\)$/\1/')"
+                  # Check if any active pod name ends with this suffix
+                  if echo "$active_pods" | grep -q ".\{1,\}${pod_suffix}$"; then
+                    continue
+                  fi
+                  # Also require the dir to be older than maxAgeDays as a safety net
+                  if find "$dir" -maxdepth 0 -mtime +"$BUILDS_MAX_AGE_DAYS" | grep -q .; then
+                    if [ "$DRY_RUN" = "true" ]; then
+                      echo "[dry-run] Would delete orphaned dir: $dir"
+                    else
+                      echo "Deleting orphaned dir: $dir"
+                      rm -rf "$dir"
+                    fi
+                  fi
+                done
               else
-                find "$BUILDS_PATH" -mindepth 1 -maxdepth 1 -type d -mtime +"$BUILDS_MAX_AGE_DAYS" -exec rm -rf {} + 2>&1 || true
+                echo "No service account token found, skipping build dir cleanup"
               fi
               {{- end }}
 
@@ -107,8 +136,8 @@ spec:
                 {{- if .Values.cleanup.docker.containers.enabled }}
                 echo "Pruning stopped containers..."
                 if [ "$DRY_RUN" = "true" ]; then
-                  echo "[dry-run] Containers that would be pruned:"
-                  docker container ls -a --filter status=exited ${CONTAINER_FILTER:+--filter "$CONTAINER_FILTER"} 2>&1 || true
+                  echo "[dry-run] Exited containers (filter: ${CONTAINER_FILTER:-none}):"
+                  docker container ls -a --filter status=exited 2>&1 || true
                 else
                   docker container prune -f ${CONTAINER_FILTER:+--filter "$CONTAINER_FILTER"} 2>&1 || true
                 fi
@@ -117,8 +146,8 @@ spec:
                 {{- if .Values.cleanup.docker.danglingImages.enabled }}
                 echo "Pruning dangling images..."
                 if [ "$DRY_RUN" = "true" ]; then
-                  echo "[dry-run] Dangling images that would be pruned:"
-                  docker image ls --filter dangling=true ${DANGLING_IMAGE_FILTER:+--filter "$DANGLING_IMAGE_FILTER"} 2>&1 || true
+                  echo "[dry-run] Dangling images (filter: ${DANGLING_IMAGE_FILTER:-none}):"
+                  docker image ls --filter dangling=true 2>&1 || true
                 else
                   docker image prune -f ${DANGLING_IMAGE_FILTER:+--filter "$DANGLING_IMAGE_FILTER"} 2>&1 || true
                 fi
@@ -127,8 +156,8 @@ spec:
                 {{- if .Values.cleanup.docker.unusedImages.enabled }}
                 echo "Pruning ALL unused images..."
                 if [ "$DRY_RUN" = "true" ]; then
-                  echo "[dry-run] Unused images that would be pruned:"
-                  docker image ls ${UNUSED_IMAGE_FILTER:+--filter "$UNUSED_IMAGE_FILTER"} 2>&1 || true
+                  echo "[dry-run] All images (filter: ${UNUSED_IMAGE_FILTER:-none}):"
+                  docker image ls 2>&1 || true
                 else
                   docker image prune -af ${UNUSED_IMAGE_FILTER:+--filter "$UNUSED_IMAGE_FILTER"} 2>&1 || true
                 fi

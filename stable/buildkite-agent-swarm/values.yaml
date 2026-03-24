@@ -237,10 +237,10 @@ cleanup:
     enabled: true
     containers:
       enabled: true
-      filter: "until=48h"
+      filter: "until=336h"    # 14 days
     danglingImages:
       enabled: true
-      filter: "until=48h"
+      filter: "until=336h"    # 14 days
     unusedImages:
       enabled: false        # aggressive — off by default
       filter: "until=168h"
