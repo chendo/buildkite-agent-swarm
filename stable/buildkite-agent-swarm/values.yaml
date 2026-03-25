@@ -104,6 +104,16 @@ registry:
       cpu: 0.2
       memory: 4G
   nodeSelector: {}
+  # Automatic garbage collection of old tags/images
+  gc:
+    enabled: false
+    intervalSeconds: 21600       # 6 hours
+    dryRun: true                 # Log what would be deleted without acting
+    keepLastN: 10                # Keep last N tags per repo
+    excludeTags:                 # Tag patterns that are never deleted
+      - "latest"
+    deleteUntagged: true         # --delete-untagged flag for blob GC
+    resources: {}
 
 # Add scriptes to /docker-entrypoint.d/ via a ConfigMap
 entrypointd: {}

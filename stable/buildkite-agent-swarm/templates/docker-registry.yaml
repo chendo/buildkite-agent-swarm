@@ -23,6 +23,9 @@ spec:
         imagePullPolicy: {{ default $registry.imagePullPolicy "IfNotPresent" }}
         ports:
         - containerPort: 5000
+        env:
+        - name: REGISTRY_STORAGE_DELETE_ENABLED
+          value: "true"
         volumeMounts:
         - mountPath: /var/lib/registry
           name: docker-registry-volume
@@ -48,6 +51,251 @@ spec:
           timeoutSeconds: 2
         resources:
 {{ toYaml $registry.resources | indent 10 }}
+      {{- if $registry.gc.enabled }}
+      {{- $keepLastN := int ($registry.gc.keepLastN | default 10) }}
+      - name: registry-gc
+        image: {{ default $registry.image "registry:2" }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+        env:
+          - name: DRY_RUN
+            value: {{ $registry.gc.dryRun | default false | quote }}
+          - name: REGISTRY_URL
+            value: "http://localhost:5000"
+          - name: KEEP_LAST_N
+            value: {{ $keepLastN | quote }}
+          - name: EXCLUDE_PATTERN
+            value: {{ join "|" ($registry.gc.excludeTags | default (list "latest")) | quote }}
+          - name: GC_INTERVAL
+            value: {{ $registry.gc.intervalSeconds | default 21600 | quote }}
+        resources:
+{{ toYaml ($registry.gc.resources | default dict) | indent 10 }}
+        volumeMounts:
+        - mountPath: /var/lib/registry
+          name: docker-registry-volume
+        command:
+          - /bin/sh
+          - -c
+          - |
+            echo "Registry GC sidecar starting, waiting for registry..."
+            while ! wget -qO- "${REGISTRY_URL}/v2/" >/dev/null 2>&1; do
+              sleep 5
+            done
+            echo "Registry is up, interval=${GC_INTERVAL}s"
+            while true; do
+              REGISTRY_DATA="/var/lib/registry/docker/registry/v2/repositories"
+              BLOB_DIR="/var/lib/registry/docker/registry/v2/blobs"
+              KEPT_DIGESTS="$(mktemp)"
+              DELETE_DIGESTS="$(mktemp)"
+
+              echo "=== Registry GC starting at $(date -Iseconds) ==="
+              echo "Current registry size: $(du -sh /var/lib/registry 2>/dev/null | awk '{print $1}')"
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "*** DRY RUN MODE — no deletions will be performed ***"
+              fi
+
+              collect_digests() {
+                grep -oE '"digest": *"sha256:[a-f0-9]+"' "$1" | grep -oE 'sha256:[a-f0-9]+' >> "$2"
+              }
+
+              # 1. Enumerate repositories
+              repos="$(wget -qO- "${REGISTRY_URL}/v2/_catalog" 2>/dev/null | sed 's/.*\[//;s/\].*//;s/"//g;s/,/ /g')"
+              if [ -z "$repos" ]; then
+                echo "No repositories found"
+                rm -f "$KEPT_DIGESTS" "$DELETE_DIGESTS"
+                echo "--- Sleeping ${GC_INTERVAL}s ---"
+                sleep "$GC_INTERVAL"
+                continue
+              fi
+
+              total_delete=0
+              for repo in $repos; do
+                echo "--- Repository: $repo ---"
+
+                TAG_DIR="${REGISTRY_DATA}/${repo}/_manifests/tags"
+                if [ ! -d "$TAG_DIR" ]; then
+                  echo "  No tags"
+                  continue
+                fi
+                tags="$(ls -t "$TAG_DIR")"
+
+                if [ -z "$tags" ]; then
+                  echo "  No tags"
+                  continue
+                fi
+
+                tag_count="$(echo "$tags" | wc -l | tr -d ' ')"
+                echo "  Found $tag_count tag(s)"
+
+                # If within retention limit, all tags are kept
+                if [ "$tag_count" -le "$KEEP_LAST_N" ]; then
+                  echo "  Within retention limit ($KEEP_LAST_N), skipping"
+                  for tag in $tags; do
+                    link_file="$TAG_DIR/$tag/current/link"
+                    if [ -f "$link_file" ]; then
+                      hash="$(cat "$link_file" | cut -d: -f2)"
+                      blob_path="$BLOB_DIR/sha256/$(echo "$hash" | cut -c1-2)/$hash/data"
+                      [ -f "$blob_path" ] && collect_digests "$blob_path" "$KEPT_DIGESTS"
+                    fi
+                  done
+                  continue
+                fi
+
+                # 2. Sort by push time (newest first), classify kept vs delete
+                kept=0
+                repo_delete=0
+                for tag in $tags; do
+                  tag_time="$(stat -c '%Y' "$TAG_DIR/$tag" 2>/dev/null || stat -f '%m' "$TAG_DIR/$tag" 2>/dev/null)"
+                  tag_date="$(date -d "@$tag_time" -Iseconds 2>/dev/null || date -r "$tag_time" -Iseconds 2>/dev/null || echo "unknown")"
+
+                  is_excluded=false
+                  if echo "$tag" | grep -qE "^(${EXCLUDE_PATTERN})$"; then
+                    is_excluded=true
+                  fi
+
+                  keep=false
+                  if [ "$is_excluded" = "true" ]; then
+                    keep=true
+                    echo "  Keeping (excluded): $tag  [$tag_date]"
+                  else
+                    kept=$((kept + 1))
+                    if [ "$kept" -le "$KEEP_LAST_N" ]; then
+                      keep=true
+                      echo "  Keeping: $tag  [$tag_date]"
+                    fi
+                  fi
+
+                  # Collect blob digests from manifest on disk
+                  link_file="$TAG_DIR/$tag/current/link"
+                  if [ -f "$link_file" ]; then
+                    hash="$(cat "$link_file" | cut -d: -f2)"
+                    blob_path="$BLOB_DIR/sha256/$(echo "$hash" | cut -c1-2)/$hash/data"
+                    if [ -f "$blob_path" ]; then
+                      if [ "$keep" = "true" ]; then
+                        collect_digests "$blob_path" "$KEPT_DIGESTS"
+                      else
+                        collect_digests "$blob_path" "$DELETE_DIGESTS"
+                      fi
+                    fi
+                  fi
+
+                  if [ "$keep" = "false" ]; then
+                    repo_delete=$((repo_delete + 1))
+                  fi
+                done
+
+                if [ "$repo_delete" -gt 0 ]; then
+                  echo "  => $repo_delete tag(s) to delete"
+                  total_delete=$((total_delete + repo_delete))
+                fi
+              done
+
+              # 3. Calculate deduplicated space savings
+              echo ""
+              echo "=== Space calculation ==="
+              sort -u "$KEPT_DIGESTS" -o "$KEPT_DIGESTS"
+              sort -u "$DELETE_DIGESTS" -o "$DELETE_DIGESTS"
+
+              unique_digests="$(comm -23 "$DELETE_DIGESTS" "$KEPT_DIGESTS")"
+              unique_count="$(echo "$unique_digests" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+              echo "Total blobs referenced by deleted tags: $(wc -l < "$DELETE_DIGESTS" | tr -d ' ')"
+              echo "Blobs also referenced by kept tags:     $(comm -12 "$DELETE_DIGESTS" "$KEPT_DIGESTS" | wc -l | tr -d ' ')"
+              echo "Blobs unique to deleted tags:           $unique_count"
+
+              total_bytes=0
+              for digest in $unique_digests; do
+                [ -z "$digest" ] && continue
+                hash="$(echo "$digest" | cut -d: -f2)"
+                blob_path="$BLOB_DIR/sha256/$(echo "$hash" | cut -c1-2)/$hash/data"
+                if [ -f "$blob_path" ]; then
+                  size="$(wc -c < "$blob_path" | tr -d ' ')"
+                  total_bytes=$((total_bytes + size))
+                fi
+              done
+
+              total_mb=$((total_bytes / 1048576))
+              total_gb=$((total_mb / 1024))
+
+              echo ""
+              echo "=== Pre-GC Summary ==="
+              echo "Tags to delete: $total_delete"
+              echo "Space to free:  ~${total_mb}MB (~${total_gb}GB)"
+
+              # 4. Delete manifests via registry API (nc for HTTP DELETE)
+              http_delete() {
+                response="$(printf "DELETE %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" \
+                  "$1" | nc localhost 5000 2>/dev/null)"
+                status="$(echo "$response" | head -1 | awk '{print $2}')"
+                [ "$status" = "202" ] || [ "$status" = "200" ]
+              }
+
+              if [ "$DRY_RUN" != "true" ] && [ "$total_delete" -gt 0 ]; then
+                echo ""
+                echo "=== Deleting manifests ==="
+                deleted=0
+                for repo in $repos; do
+                  TAG_DIR="${REGISTRY_DATA}/${repo}/_manifests/tags"
+                  [ -d "$TAG_DIR" ] || continue
+                  tags="$(ls -t "$TAG_DIR")"
+                  [ -z "$tags" ] && continue
+                  tag_count="$(echo "$tags" | wc -l | tr -d ' ')"
+                  [ "$tag_count" -le "$KEEP_LAST_N" ] && continue
+
+                  kept=0
+                  for tag in $tags; do
+                    if echo "$tag" | grep -qE "^(${EXCLUDE_PATTERN})$"; then
+                      continue
+                    fi
+                    kept=$((kept + 1))
+                    [ "$kept" -le "$KEEP_LAST_N" ] && continue
+
+                    link_file="$TAG_DIR/$tag/current/link"
+                    if [ -f "$link_file" ]; then
+                      digest="$(cat "$link_file")"
+                      echo "  Deleting: ${repo}:${tag} (${digest})"
+                      if ! http_delete "/v2/${repo}/manifests/${digest}"; then
+                        echo "  WARNING: Failed to delete ${repo}:${tag}"
+                      fi
+                      deleted=$((deleted + 1))
+                    fi
+                  done
+                done
+                echo "Deleted $deleted manifest(s)"
+              fi
+
+              # 5. Run blob garbage collection
+              {{- if $registry.gc.deleteUntagged | default true }}
+              GC_FLAGS="--delete-untagged"
+              {{- else }}
+              GC_FLAGS=""
+              {{- end }}
+
+              if [ "$DRY_RUN" = "true" ]; then
+                echo ""
+                echo "[dry-run] Would run: registry garbage-collect /etc/docker/registry/config.yml $GC_FLAGS"
+                echo "[dry-run] Running GC in dry-run mode..."
+                registry garbage-collect /etc/docker/registry/config.yml --dry-run $GC_FLAGS 2>&1 || true
+              elif [ "$total_delete" -gt 0 ]; then
+                echo ""
+                echo "Running blob garbage collection..."
+                registry garbage-collect /etc/docker/registry/config.yml $GC_FLAGS 2>&1
+                echo ""
+                echo "=== Post-GC ==="
+                echo "Registry size after GC: $(du -sh /var/lib/registry 2>/dev/null | awk '{print $1}')"
+              else
+                echo "No manifests deleted, skipping blob GC"
+              fi
+
+              rm -f "$KEPT_DIGESTS" "$DELETE_DIGESTS"
+              echo "=== Registry GC finished at $(date -Iseconds) ==="
+              echo "--- Sleeping ${GC_INTERVAL}s ---"
+              sleep "$GC_INTERVAL"
+            done
+      {{- end }}
       nodeSelector:
 {{ toYaml $registry.nodeSelector | indent 8 }}
       volumes:
