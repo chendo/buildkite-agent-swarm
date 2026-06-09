@@ -179,8 +179,17 @@ spec:
                 {{- if .Values.cleanup.docker.unusedImages.enabled }}
                 echo "Pruning ALL unused images..."
                 if [ "$DRY_RUN" = "true" ]; then
-                  echo "[dry-run] All images (filter: ${UNUSED_IMAGE_FILTER:-none}):"
-                  docker image ls 2>&1 || true
+                  # `docker image ls` shows *every* image, but `prune -af` only
+                  # deletes images that no container references and that match
+                  # the --filter clause. Print the actual command, the in-use
+                  # set (kept), and the full image list so the operator can
+                  # mentally diff the two — there's no native --dry-run for
+                  # image prune.
+                  echo "[dry-run] Would run: docker image prune -af${UNUSED_IMAGE_FILTER:+ --filter \"$UNUSED_IMAGE_FILTER\"}"
+                  echo "[dry-run] Images referenced by a container (KEPT regardless of age):"
+                  docker ps -a --format '  {{.ImageID}}  {{.Image}}  ({{.Names}})' 2>&1 | sort -u || true
+                  echo "[dry-run] All images on host (those NOT in the list above AND matching ${UNUSED_IMAGE_FILTER:-no filter} would be deleted):"
+                  docker image ls -a 2>&1 || true
                 else
                   docker image prune -af ${UNUSED_IMAGE_FILTER:+--filter "$UNUSED_IMAGE_FILTER"} 2>&1 || true
                 fi
