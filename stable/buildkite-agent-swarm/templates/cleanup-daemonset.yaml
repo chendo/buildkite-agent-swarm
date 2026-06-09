@@ -37,9 +37,12 @@ spec:
       - name: cleanup
         image: {{ .Values.cleanup.image | default "docker:24.0-cli" }}
         securityContext:
+          # Must run as root: the DIND daemon (privileged, root) creates the
+          # docker socket at /var/buildkite/docker/run/docker.sock with default
+          # ownership root:root mode 0660, so a non-root UID gets EACCES on
+          # connect(). The host group of the socket is also host-dependent so
+          # we can't reliably set fsGroup either.
           readOnlyRootFilesystem: true
-          runAsNonRoot: true
-          runAsUser: 1000
           allowPrivilegeEscalation: false
           capabilities:
             drop:
@@ -219,7 +222,6 @@ spec:
         {{- if .Values.cleanup.docker.enabled }}
         - name: docker-socket
           mountPath: /var/buildkite/docker/run
-          readOnly: true
         {{- end }}
       volumes:
       {{- if .Values.cleanup.builds.enabled }}
