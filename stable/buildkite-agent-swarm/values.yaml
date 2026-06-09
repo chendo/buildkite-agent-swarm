@@ -237,6 +237,9 @@ cleanup:
   resources: {}
 
   # Build directory cleanup
+  # Requires rbac.create=true (the cleanup pod calls the kube API to list
+  # pods on its node). The chart will fail to render if this is enabled
+  # without RBAC.
   builds:
     enabled: true
     path: /var/buildkite/builds

@@ -1,4 +1,7 @@
 {{- if .Values.cleanup.enabled }}
+{{- if and .Values.cleanup.builds.enabled (not .Values.rbac.create) }}
+{{- fail "cleanup.builds.enabled requires rbac.create=true so the cleanup pod can list pods on its node — without it, the kube API call returns 403 and the build-dir cleanup silently falls through to mtime-only deletion." }}
+{{- end }}
 {{- $name := include "fullname" . }}
 {{- $buildsPath := .Values.cleanup.builds.path | default "/var/buildkite/builds" }}
 {{- $maxAgeDays := int (.Values.cleanup.builds.maxAgeDays | default 14) }}
