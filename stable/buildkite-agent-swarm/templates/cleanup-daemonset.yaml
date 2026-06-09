@@ -99,41 +99,50 @@ spec:
               APISERVER="https://kubernetes.default.svc"
               CACERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
               SA_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || true)"
-              if [ -n "$SA_TOKEN" ]; then
+              if [ -z "$SA_TOKEN" ]; then
+                echo "No service account token found, skipping build dir cleanup"
+              else
                 NAMESPACE="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
                 api_response="$(wget -qO- --header="Authorization: Bearer $SA_TOKEN" \
                   --ca-certificate="$CACERT" \
                   "${APISERVER}/api/v1/namespaces/${NAMESPACE}/pods?fieldSelector=spec.nodeName=${NODE_NAME}" 2>/dev/null)"
-                # K8s emits compact single-line JSON; greedy sed would capture
-                # at most one "name" per line. grep -oE finds every match. The
-                # API serializes pod metadata with "name" as the first field,
-                # so "metadata":{"name":"X" reliably brackets the pod's own
-                # name (not container/volume/ownerReference "name" fields).
-                active_pods="$(echo "$api_response" \
-                  | grep -oE '"metadata":[{]"name":"[^"]+"' \
-                  | sed 's/.*"name":"//;s/"$//' \
-                  | sort -u)"
-                for dir in "$BUILDS_PATH"/*/; do
-                  [ -d "$dir" ] || continue
-                  dir_name="$(basename "$dir")"
-                  # Extract pod suffix (last 5 chars) from agent name <node>-<queue>-<suffix>
-                  pod_suffix="$(echo "$dir_name" | sed 's/.*-\(.....\)$/\1/')"
-                  # Check if any active pod name ends with this suffix
-                  if echo "$active_pods" | grep -q ".\{1,\}${pod_suffix}$"; then
-                    continue
-                  fi
-                  # Also require the dir to be older than maxAgeDays as a safety net
-                  if find "$dir" -maxdepth 0 -mtime +"$BUILDS_MAX_AGE_DAYS" | grep -q .; then
-                    if [ "$DRY_RUN" = "true" ]; then
-                      echo "[dry-run] Would delete orphaned dir: $dir"
-                    else
-                      echo "Deleting orphaned dir: $dir"
-                      rm -rf "$dir"
+                # Bail if the response doesn't look like a PodList. Without this
+                # guard, a transient API error leaves active_pods empty, the
+                # suffix check matches nothing, and the mtime branch deletes
+                # every dir older than maxAgeDays — the safety net stops being
+                # a safety net if it's the only net.
+                if ! echo "$api_response" | grep -q '"kind":"PodList"'; then
+                  echo "WARNING: failed to fetch pod list from kube API; skipping build dir cleanup this run"
+                else
+                  # K8s emits compact single-line JSON; greedy sed would capture
+                  # at most one "name" per line. grep -oE finds every match. The
+                  # API serializes pod metadata with "name" as the first field,
+                  # so "metadata":{"name":"X" reliably brackets the pod's own
+                  # name (not container/volume/ownerReference "name" fields).
+                  active_pods="$(echo "$api_response" \
+                    | grep -oE '"metadata":[{]"name":"[^"]+"' \
+                    | sed 's/.*"name":"//;s/"$//' \
+                    | sort -u)"
+                  for dir in "$BUILDS_PATH"/*/; do
+                    [ -d "$dir" ] || continue
+                    dir_name="$(basename "$dir")"
+                    # Extract pod suffix (last 5 chars) from agent name <node>-<queue>-<suffix>
+                    pod_suffix="$(echo "$dir_name" | sed 's/.*-\(.....\)$/\1/')"
+                    # Check if any active pod name ends with this suffix
+                    if echo "$active_pods" | grep -q ".\{1,\}${pod_suffix}$"; then
+                      continue
                     fi
-                  fi
-                done
-              else
-                echo "No service account token found, skipping build dir cleanup"
+                    # Also require the dir to be older than maxAgeDays as a safety net
+                    if find "$dir" -maxdepth 0 -mtime +"$BUILDS_MAX_AGE_DAYS" | grep -q .; then
+                      if [ "$DRY_RUN" = "true" ]; then
+                        echo "[dry-run] Would delete orphaned dir: $dir"
+                      else
+                        echo "Deleting orphaned dir: $dir"
+                        rm -rf "$dir"
+                      fi
+                    fi
+                  done
+                fi
               fi
               {{- end }}
 
