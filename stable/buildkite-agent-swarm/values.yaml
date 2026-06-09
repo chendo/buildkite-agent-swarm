@@ -232,7 +232,7 @@ dindDaemonSet:
 cleanup:
   enabled: false
   dryRun: true              # log what would be deleted without actually deleting
-  image: docker:28.0-cli
+  image: docker:28.0.1-cli
   intervalSeconds: 86400    # once per day
   resources: {}
 

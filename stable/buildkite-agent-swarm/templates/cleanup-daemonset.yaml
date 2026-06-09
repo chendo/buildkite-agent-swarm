@@ -35,7 +35,7 @@ spec:
       serviceAccount: {{ template "fullname" . }}
       containers:
       - name: cleanup
-        image: {{ .Values.cleanup.image | default "docker:24.0-cli" }}
+        image: {{ .Values.cleanup.image | default "docker:28.0.1-cli" }}
         securityContext:
           # Must run as root: the DIND daemon (privileged, root) creates the
           # docker socket at /var/buildkite/docker/run/docker.sock with default
