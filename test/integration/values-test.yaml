@@ -1,0 +1,52 @@
+# Base values used by every integration scenario. Individual tests overlay
+# their own --set / -f to flip toggles.
+#
+# A fake token is fine — the agent pods will CrashLoop trying to register
+# with Buildkite, but the cleanup DaemonSet runs independently and that's
+# what we're testing.
+agent:
+  token: "fake-not-used-by-integration-tests"
+  queues:
+    default:
+      replicas: 1
+
+# RBAC must be on for build-dir cleanup (the chart fails to render otherwise).
+rbac:
+  create: true
+
+# DIND DaemonSet provides the docker socket cleanup talks to.
+dindDaemonSet:
+  enabled: true
+  storage:
+    tmpfs: true
+    sizeLimit: 2Gi
+
+# Disable the components the tests don't need so boot is faster.
+registry:
+  enabled: false
+priorities:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+
+cleanup:
+  enabled: true
+  dryRun: false
+  intervalSeconds: 10
+  builds:
+    enabled: true
+    maxAgeDays: 14
+  docker:
+    enabled: true
+    containers:
+      enabled: true
+      filter: ""
+    danglingImages:
+      enabled: true
+      filter: ""
+    unusedImages:
+      enabled: false
+    buildCache:
+      enabled: false
+    volumes:
+      enabled: false

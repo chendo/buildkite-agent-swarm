@@ -1,0 +1,51 @@
+# k3d v1alpha5 cluster config used by the integration harness.
+#
+# Single-node — the cleanup logic is a DaemonSet so one node exercises it
+# fully. Disabling Traefik/servicelb/metrics/local-storage strips out the
+# kube-system pods we don't need so the cluster reaches Ready faster.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: bk-cleanup-it
+servers: 1
+agents: 0
+image: docker.io/rancher/k3s:v1.31.3-k3s1
+# The image-tarball mount (when needed for nested-docker / airgap setups)
+# is appended by run.sh via --volume on the CLI, because k3d requires an
+# absolute path for bind sources and we resolve it at runtime.
+options:
+  k3d:
+    # No need for k3d's load-balancer container — we never access services
+    # from outside the cluster, only via kubectl exec.
+    disableLoadbalancer: true
+  k3s:
+    extraArgs:
+      - arg: --disable=traefik
+        nodeFilters:
+          - server:*
+      - arg: --disable=servicelb
+        nodeFilters:
+          - server:*
+      - arg: --disable=metrics-server
+        nodeFilters:
+          - server:*
+      - arg: --disable=local-storage
+        nodeFilters:
+          - server:*
+      # Required when k3s itself runs inside a container (nested docker, e.g.
+      # orbstack / colima). Without it the kubelet tries to open /dev/kmsg
+      # and refuses to start with "operation not permitted".
+      - arg: --kubelet-arg=feature-gates=KubeletInUserNamespace=true
+        nodeFilters:
+          - server:*
+      # Same nested-docker workaround — without these flags the kubelet
+      # tries to mkdir /sys/fs/cgroup/kubepods and fails on a rootless dind.
+      - arg: --kubelet-arg=cgroups-per-qos=false
+        nodeFilters:
+          - server:*
+      - arg: --kubelet-arg=enforce-node-allocatable=
+        nodeFilters:
+          - server:*
+  kubeconfig:
+    updateDefaultKubeconfig: false
+    switchCurrentContext: false
