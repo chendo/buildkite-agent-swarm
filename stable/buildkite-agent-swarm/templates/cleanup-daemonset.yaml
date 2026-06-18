@@ -109,9 +109,21 @@ spec:
                 echo "No service account token found, skipping build dir cleanup"
               else
                 NAMESPACE="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
-                api_response="$(wget -qO- --header="Authorization: Bearer $SA_TOKEN" \
-                  --ca-certificate="$CACERT" \
-                  "${APISERVER}/api/v1/namespaces/${NAMESPACE}/pods?fieldSelector=spec.nodeName=${NODE_NAME}" 2>/dev/null)"
+                # We're invoking busybox wget (docker:*-cli is alpine-based);
+                # it does not accept --ca-certificate. Point wget at the SA
+                # CA bundle via SSL_CERT_FILE instead — busybox wget reads
+                # that env var when validating HTTPS.
+                #
+                # `pretty=false` is REQUIRED. Without it the API server
+                # returns indented multi-line JSON; the PodList grep below
+                # ("kind":"PodList") and the parser regex ("metadata":[{])
+                # both assume the response is on a single line with no
+                # whitespace between key and value, so a pretty-printed
+                # response makes the guard misfire and the parser miss
+                # every pod.
+                api_response="$(SSL_CERT_FILE="$CACERT" wget -qO- \
+                  --header="Authorization: Bearer $SA_TOKEN" \
+                  "${APISERVER}/api/v1/namespaces/${NAMESPACE}/pods?fieldSelector=spec.nodeName=${NODE_NAME}&pretty=false" 2>/dev/null)"
                 # Bail if the response doesn't look like a PodList. Without this
                 # guard, a transient API error leaves active_pods empty, the
                 # suffix check matches nothing, and the mtime branch deletes
